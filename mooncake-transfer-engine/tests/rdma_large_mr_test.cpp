@@ -84,8 +84,6 @@ extern "C" int ibv_dereg_mr(ibv_mr *mr) {
     return original(mr);
 }
 
-using namespace mooncake;
-
 namespace mooncake {
 
 // Small max_mr_size so the >max_mr_size path is exercised without needing a

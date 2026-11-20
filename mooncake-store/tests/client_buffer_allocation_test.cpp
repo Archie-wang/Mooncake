@@ -1,17 +1,22 @@
+// Copyright 2026 Mooncake contributors
+// SPDX-License-Identifier: Apache-2.0
+
 #include "common/client_buffer_allocation.h"
 #include "nof/dma_buffer_allocator.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdint>
 #include <cstdlib>
+#include <mutex>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
-
-#include <atomic>
-#include <cerrno>
-#include <mutex>
 
 namespace {
 std::atomic_bool trace_discard{false};
@@ -52,7 +57,8 @@ class SizedHostFreeTest : public ::testing::Test {
         fail_discard = false;
         unsetenv("MC_STORE_FREE_THREADS");
     }
-    static constexpr size_t size = (16ull << 30) + 73;
+    // Keep partial edge pages while satisfying aligned_alloc(64, size).
+    static constexpr size_t size = (16ull << 30) + 64;
 };
 
 TEST_F(SizedHostFreeTest, DiscardsOnlyFullOwnedPagesAndJoinsBeforeFree) {
@@ -106,13 +112,15 @@ TEST_F(SizedHostFreeTest, DisabledInvalidAndUnsizedFreeKeepOriginalPath) {
 TEST_F(SizedHostFreeTest, AdviceFailureStillReleasesAllocation) {
     ASSERT_EQ(setenv("MC_STORE_FREE_THREADS", "4", 1), 0);
     fail_discard = true;
-    void *ptr = allocate_buffer_allocator_memory(size, "tcp", 4096);
+    const size_t page = sysconf(_SC_PAGESIZE);
+    const size_t allocation_size = size / page * page;
+    void *ptr = allocate_buffer_allocator_memory(allocation_size, "tcp", page);
     ASSERT_NE(ptr, nullptr);
     const uintptr_t address = reinterpret_cast<uintptr_t>(ptr);
-    free_memory("tcp", ptr, nullptr, size);
+    free_memory("tcp", ptr, nullptr, allocation_size);
     ASSERT_EQ(ranges.size(), 4u);
     unsigned char residency = 0;
-    EXPECT_EQ(mincore(reinterpret_cast<void *>(address), 4096, &residency), -1);
+    EXPECT_EQ(mincore(reinterpret_cast<void *>(address), page, &residency), -1);
     EXPECT_EQ(errno, ENOMEM);
 }
 
